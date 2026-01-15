@@ -44,30 +44,65 @@ def main():
     encoder = Encoder()
     encoder_path = hf_hub_download(repo_id='ekwek/Soprano-Encoder', filename='encoder.pth')
     encoder.load_state_dict(torch.load(encoder_path))
+    encoder.eval() # Good practice to set to eval mode
     print("Model loaded.")
-
 
     print("Reading metadata.")
     files = []
-    with open(f'{input_dir}/metadata.txt', encoding='utf-8') as f:
-        data = f.read().split('\n')
-        for line in data:
-            if not line: continue
-            filename, transcript = line.split('|', maxsplit=1)
-            files.append((filename, transcript))
-    print(f'{len(files)} samples located in directory.')
+    # Ensure metadata.txt exists or handle exception
+    try:
+        with open(f'{input_dir}/metadata.txt', encoding='utf-8') as f:
+            data = f.read().split('\n')
+            for line in data:
+                if not line: continue
+                filename, transcript = line.split('|', maxsplit=1)
+                files.append((filename, transcript))
+        print(f'{len(files)} samples located in directory.')
+    except FileNotFoundError:
+        print(f"Error: metadata.txt not found in {input_dir}")
+        return
+
+    # Define Mel Spectrogram transform
+    # Soprano uses 32kHz audio, and the encoder expects 50 channels (n_mels=50).
+    mel_transform = torchaudio.transforms.MelSpectrogram(
+        sample_rate=SAMPLE_RATE,
+        n_fft=1024,
+        win_length=1024,
+        hop_length=320,  # 10ms at 32kHz
+        n_mels=50,       # Matches the model's input channels
+        center=True,
+        power=1.0,
+    )
 
     print("Encoding audio.")
     dataset = []
     for sample in tqdm(files):
         filename, transcript = sample
-        audio, sr = torchaudio.load(f'{input_dir}/wavs/{filename}.wav')
+        wav_path = f'{input_dir}/wavs/{filename}.wav'
+        
+        try:
+            audio, sr = torchaudio.load(wav_path)
+        except Exception as e:
+            print(f"Could not load {wav_path}: {e}")
+            continue
+
         if audio.shape[0] > 1: audio = audio.mean(dim=0, keepdim=True)
         if sr != SAMPLE_RATE:
             audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
-        audio = audio.unsqueeze(1)
+        
+        # Compute Mel Spectrogram
+        # Input audio: [1, Time]
+        mels = mel_transform(audio) # Output: [1, 50, Mel_Time]
+        
+        # Apply Log-Mel scaling (standard for neural encoders)
+        mels = torch.log(torch.clamp(mels, min=1e-5))
+
+        # The encoder expects [Batch, Channels, Length].
+        # mels is [1, 50, Mel_Time], which works as Batch=1.
+        
         with torch.no_grad():
-            audio_tokens = encoder(audio)
+            audio_tokens = encoder(mels)
+        
         dataset.append([transcript, audio_tokens.squeeze(0).tolist()])
 
     print("Generating train/test splits.")
