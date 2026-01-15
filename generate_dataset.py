@@ -52,6 +52,7 @@ def main():
     with open(f'{input_dir}/metadata.txt', encoding='utf-8') as f:
         data = f.read().split('\n')
         for line in data:
+            if not line: continue
             filename, transcript = line.split('|', maxsplit=1)
             files.append((filename, transcript))
     print(f'{len(files)} samples located in directory.')
@@ -60,8 +61,8 @@ def main():
     dataset = []
     for sample in tqdm(files):
         filename, transcript = sample
-        sr, audio = wavfile.read(f'{input_dir}/wavs/{filename}.wav')
-        audio = torch.from_numpy(audio)
+        audio, sr = torchaudio.load(f'{input_dir}/wavs/{filename}.wav')
+        if audio.shape[0] > 1: audio = audio.mean(dim=0, keepdim=True)
         if sr != SAMPLE_RATE:
             audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
         audio = audio.unsqueeze(0)

@@ -108,8 +108,8 @@ def compute_loss(logits, y, num_steps):
     acc = acc / num_steps
     return audio_loss, text_loss, acc
 
-def evaluate(val_dataloader):
-    model.eval()
+def evaluate(val_dataloader, model_engine):
+    model_engine.eval()
     val_dataloader_it = iter(val_dataloader)
     with torch.no_grad():
         val_audio_loss_accum = torch.tensor(0.0).to(device)
@@ -120,13 +120,13 @@ def evaluate(val_dataloader):
             x, y = next(val_dataloader_it)
             x, y = x.to(device), y.to(device)
             with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-                logits = model(x).logits
+                logits = model_engine(x).logits
                 audio_loss, text_loss, acc = compute_loss(logits, y, val_loss_steps)
             val_audio_loss_accum += audio_loss.detach()
             val_text_loss_accum += text_loss.detach()
             val_acc_accum += acc.detach()
         print(f"validation text loss: {val_text_loss_accum.item():.4f}\tvalidation audio loss: {val_audio_loss_accum.item():.4f}\tvalidation acc: {val_acc_accum.item():.4f}")
-    model.train()
+    model_engine.train()
 
 
 tokenizer = AutoTokenizer.from_pretrained('ekwek/Soprano-80M')
@@ -135,6 +135,11 @@ if __name__ == '__main__':
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
+        
+        # OPTIMIZATION: Enable TF32 for speed on Ampere+ GPUs
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        
     torch.set_float32_matmul_precision('high')
     print(f"Save Path: {save_path}")
 
@@ -143,8 +148,21 @@ if __name__ == '__main__':
     cooldown_steps = int(max_steps * cooldown_ratio)
 
     # model
-    model = AutoModelForCausalLM.from_pretrained('ekwek/Soprano-80M')
-    model.to(torch.bfloat16).to(device)
+    # OPTIMIZATION: Load directly in bfloat16 and enable Flash Attention 2/3
+    print("Loading model...")
+    model = AutoModelForCausalLM.from_pretrained(
+        'ekwek/Soprano-80M',
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2" 
+    )
+    model.to(device)
+    
+    # OPTIMIZATION: Compile the model
+    # We keep a reference to 'model' as 'raw_model' for saving purposes,
+    # as the compiled wrapper does not support save_pretrained.
+    raw_model = model
+    print("Compiling model...")
+    model = torch.compile(model)
     model.train()
 
     # dataset
@@ -172,13 +190,22 @@ if __name__ == '__main__':
     )
 
     # optimizer
-    opt = torch.optim.AdamW(model.parameters(), max_lr, betas=betas, weight_decay=weight_decay, fused=True)
+    # Use raw_model parameters to ensure we aren't optimizing the wrapper overhead
+    opt = torch.optim.AdamW(raw_model.parameters(), max_lr, betas=betas, weight_decay=weight_decay, fused=True)
 
     pbar = tqdm(range(0, max_steps), ncols=200, dynamic_ncols=True)
     for step in pbar:
         start = time.time()
-        if val_freq>0 and (step % val_freq == 0 or step==max_steps-1):
-            evaluate(val_dataloader)
+        
+        # Save before evaluation
+        if val_freq > 0 and (step % val_freq == 0 or step == max_steps - 1):
+            checkpoint_dir = save_path / f"checkpoint_{step}"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            
+            raw_model.save_pretrained(checkpoint_dir)
+            tokenizer.save_pretrained(checkpoint_dir)
+            
+            evaluate(val_dataloader, model)
 
         opt.zero_grad()
         audio_loss_accum = 0.0
@@ -201,7 +228,7 @@ if __name__ == '__main__':
             total_loss = audio_loss + text_factor*text_loss
             total_loss.backward()
 
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        norm = torch.nn.utils.clip_grad_norm_(raw_model.parameters(), 1.0)
         lr = get_lr(step)
         for param_group in opt.param_groups:
             param_group['lr'] = lr
@@ -214,7 +241,7 @@ if __name__ == '__main__':
         tqdm_log = f'text loss: {text_loss_accum.item():.3f} | audio loss: {audio_loss_accum.item():.3f} | acc: {acc_accum.item():.4f} | lr: {lr:.2e} | norm: {norm:.3f} | time: {dt:.2f} ms | {tokens_per_second:.2f} t/s'
         pbar.set_description(tqdm_log)
 
-    print(f"Training complete. Saving model at {save_path}")
-    model.save_pretrained(save_path)
+    print(f"Training complete. Final save at {save_path}")
+    raw_model.save_pretrained(save_path)
     tokenizer.save_pretrained(save_path)
     print("Saving done.")
