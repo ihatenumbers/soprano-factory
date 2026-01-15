@@ -129,7 +129,7 @@ def evaluate(val_dataloader, model_engine):
     model_engine.train()
 
 
-tokenizer = AutoTokenizer.from_pretrained('ekwek/Soprano-80M')
+tokenizer = AutoTokenizer.from_pretrained('ekwek/Soprano-1.1-80M')
 if __name__ == '__main__':
     device_type = "cuda" if device.startswith("cuda") else "cpu"
     torch.manual_seed(seed)
@@ -151,7 +151,7 @@ if __name__ == '__main__':
     # OPTIMIZATION: Load directly in bfloat16 and enable Flash Attention 2/3
     print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
-        'ekwek/Soprano-80M',
+        'ekwek/Soprano-1.1-80M',
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2" 
     )

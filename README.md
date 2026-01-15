@@ -2,7 +2,7 @@
   
   # Soprano-Factory: Train your own 2000x realtime text-to-speech model
 
-  [![Alt Text](https://img.shields.io/badge/HuggingFace-Model-orange?logo=huggingface)](https://huggingface.co/ekwek/Soprano-80M)
+  [![Alt Text](https://img.shields.io/badge/HuggingFace-Model-orange?logo=huggingface)](https://huggingface.co/ekwek/Soprano-1.1-80M)
   [![Alt Text](https://img.shields.io/badge/Github-Repo-black?logo=github)](https://github.com/ekwek1/soprano)
   [![Alt Text](https://img.shields.io/badge/HuggingFace-Demo-yellow?logo=huggingface)](https://huggingface.co/spaces/ekwek/Soprano-TTS)
 
