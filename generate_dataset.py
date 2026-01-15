@@ -65,7 +65,7 @@ def main():
         if audio.shape[0] > 1: audio = audio.mean(dim=0, keepdim=True)
         if sr != SAMPLE_RATE:
             audio = torchaudio.functional.resample(audio, sr, SAMPLE_RATE)
-        audio = audio.unsqueeze(0)
+        audio = audio.unsqueeze(1)
         with torch.no_grad():
             audio_tokens = encoder(audio)
         dataset.append([transcript, audio_tokens.squeeze(0).tolist()])
