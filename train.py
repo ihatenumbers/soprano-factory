@@ -42,16 +42,16 @@ args = get_args()
 # training hyperparameters
 device = 'cuda:0'
 seed = 1337
-max_lr = 5e-4
+max_lr = 5e-5
 warmup_ratio = 0.1
 cooldown_ratio = 0.1
 min_lr = 0.1 * max_lr
 batch_size = 8
 grad_accum_steps = 1
 seq_len = 1024
-val_freq = 500
+val_freq = 1000
 text_factor = 0.0 # currently does not train on text inputs, you can increase to change this
-max_steps = 5000
+max_steps = 10000
 betas = (0.9, 0.95)
 weight_decay = 0.1
 train_dataset_path = f'{args.input_dir}/train.json'
@@ -143,12 +143,9 @@ if __name__ == '__main__':
     torch.set_float32_matmul_precision('high')
     print(f"Save Path: {save_path}")
 
-    # lr schedule
     warmup_steps = int(max_steps * warmup_ratio)
     cooldown_steps = int(max_steps * cooldown_ratio)
 
-    # model
-    # OPTIMIZATION: Load directly in bfloat16 and enable Flash Attention 2/3
     print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
         'ekwek/Soprano-1.1-80M',
@@ -157,15 +154,11 @@ if __name__ == '__main__':
     )
     model.to(device)
     
-    # OPTIMIZATION: Compile the model
-    # We keep a reference to 'model' as 'raw_model' for saving purposes,
-    # as the compiled wrapper does not support save_pretrained.
     raw_model = model
     print("Compiling model...")
     model = torch.compile(model)
     model.train()
 
-    # dataset
     dataset = AudioDataset(train_dataset_path)
     # we need batch_size * 16 to have enough tokens after packing
     dataloader = DataLoader(dataset,
@@ -189,8 +182,6 @@ if __name__ == '__main__':
         collate_fn=collate_pack,
     )
 
-    # optimizer
-    # Use raw_model parameters to ensure we aren't optimizing the wrapper overhead
     opt = torch.optim.AdamW(raw_model.parameters(), max_lr, betas=betas, weight_decay=weight_decay, fused=True)
 
     pbar = tqdm(range(0, max_steps), ncols=200, dynamic_ncols=True)
